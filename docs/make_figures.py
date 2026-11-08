@@ -216,22 +216,36 @@ for name, verts in pieces:
     patches.append(patch)
 label = fig.text(0.03, 0.91, "", fontsize=15, fontweight="bold")
 sub = fig.text(0.97, 0.915, "", fontsize=10.5, color=SOFT, ha="right")
-done = [0.0, 0]
+def piece_area(verts):
+    return abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in
+                   zip(verts, verts[1:] + verts[:1]))) / 2
+
+
+# cumulative state after each frame, computed once up front - the frame
+# function only looks it up, so matplotlib calling it twice changes nothing
+shown, area_after, count_after = [], [], []
+running_area, running_count = 0.0, 0
+for group in frames:
+    running_area += sum(piece_area(pieces[i][1]) for i in group)
+    running_count += len(group)
+    area_after.append(running_area)
+    count_after.append(running_count)
+assert running_count == len(pieces)
+assert abs(running_area - covered) < 0.05, (running_area, covered)
 
 
 def step(k):
-    if k < len(frames):
-        for i in frames[k]:
-            patches[i].set_visible(True)
-            done[0] += abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in
-                               zip(pieces[i][1], pieces[i][1][1:] + pieces[i][1][:1]))) / 2
-            done[1] += 1
-    label.set_text(f"{100 * done[0] / area:5.2f}% covered")
-    sub.set_text(f"{done[1]} / {len(pieces)} pieces")
+    k = min(k, len(frames) - 1)               # hold frames repeat the last one
+    visible = {i for g in frames[:k + 1] for i in g}
+    for i, patch in enumerate(patches):
+        patch.set_visible(i in visible)
+    label.set_text(f"{100 * area_after[k] / area:5.2f}% covered")
+    sub.set_text(f"{count_after[k]} / {len(pieces)} pieces")
     return patches + [label, sub]
 
 
-anim = FuncAnimation(fig, step, frames=len(frames) + hold, blit=False)
+anim = FuncAnimation(fig, step, frames=len(frames) + hold,
+                     init_func=lambda: step(0), blit=False)
 anim.save(OUT / "build.gif", writer=PillowWriter(fps=8), dpi=80)
 plt.close(fig)
 

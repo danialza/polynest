@@ -119,7 +119,7 @@ The solver itself uses only the Python standard library; matplotlib draws the pi
 | `--generic` | — | off | use the generic, any-convex-shape solver |
 | `--shapes` | generic | — | load your own sheet and shapes from JSON |
 | `--seed` | both | 1 / 7 | starting random seed |
-| `--out` | both | `result.png` | output image |
+| `--out` | both | `result.png` / `result_generic.png` | output image |
 | `--json` | both | — | write the layout as JSON |
 | `--restarts` | structured | 16 | seeds to try |
 | `--budget` | generic | 520 | time budget in seconds |

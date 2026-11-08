@@ -5,3 +5,4 @@ result*.png
 *.log
 .venv/
 .pytest_cache/
+.memsearch/
