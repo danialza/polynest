@@ -143,24 +143,54 @@ def trapezium(top, bottom, height):
     return [(0, 0), (bottom, 0), (bottom - off, height), (off, height)]
 
 
-AREAS = {
-    "square 20x20": 400.0, "square 25x25": 625.0,
-    "rectangle 30x15": 450.0, "rectangle 35x25": 875.0,
-    "eq. triangle s=5": poly_area(equilateral(5)),
-    "eq. triangle s=30": poly_area(equilateral(30)),
-    "eq. triangle s=40": poly_area(equilateral(40)),
-    "iso. triangle 20/25": poly_area(isosceles(20, 25)),
-    "iso. triangle 30/35": poly_area(isosceles(30, 35)),
-    "trapezium 20/30 h20": 500.0,
+# The shape table: the ONLY place the shapes are defined.  Add a row here
+# (or pass --shapes file.json) and areas / side lengths follow automatically.
+SHAPES = {
+    "square 20x20": rect(20, 20), "square 25x25": rect(25, 25),
+    "rectangle 30x15": rect(30, 15), "rectangle 35x25": rect(35, 25),
+    "eq. triangle s=5": equilateral(5), "eq. triangle s=30": equilateral(30),
+    "eq. triangle s=40": equilateral(40),
+    "iso. triangle 20/25": isosceles(20, 25),
+    "iso. triangle 30/35": isosceles(30, 35),
+    "trapezium 20/30 h20": trapezium(20, 30, 20),
 }
-SIDES = {
-    "square 20x20": [20] * 4, "square 25x25": [25] * 4,
-    "rectangle 30x15": [15, 15, 30, 30], "rectangle 35x25": [25, 25, 35, 35],
-    "eq. triangle s=5": [5] * 3, "eq. triangle s=30": [30] * 3,
-    "eq. triangle s=40": [40] * 3,
-    "iso. triangle 20/25": [20, 25, 25], "iso. triangle 30/35": [30, 35, 35],
-    "trapezium 20/30 h20": [20, math.sqrt(425), math.sqrt(425), 30],
-}
+BUNDLED = set(SHAPES)                  # the instance the structured solver knows
+
+
+def side_lengths(poly):
+    return sorted(math.dist(poly[i], poly[(i + 1) % len(poly)])
+                  for i in range(len(poly)))
+
+
+def is_convex(poly):
+    signs = set()
+    n = len(poly)
+    for i in range(n):
+        (x1, y1), (x2, y2), (x3, y3) = poly[i], poly[(i + 1) % n], poly[(i + 2) % n]
+        cr = (x2 - x1) * (y3 - y2) - (y2 - y1) * (x3 - x2)
+        if abs(cr) > 1e-9:
+            signs.add(cr > 0)
+    return len(signs) == 1
+
+
+def is_rectangle(poly):
+    if len(poly) != 4:
+        return False
+    for i in range(4):
+        (x1, y1), (x2, y2), (x3, y3) = poly[i - 1], poly[i], poly[(i + 1) % 4]
+        if abs((x1 - x2) * (x3 - x2) + (y1 - y2) * (y3 - y2)) > 1e-9:
+            return False
+    return True
+
+
+def derive_specs():
+    """Area and side lengths of every shape - what validate() checks against."""
+    global AREAS, SIDES
+    AREAS = {n: poly_area(p) for n, p in SHAPES.items()}
+    SIDES = {n: side_lengths(p) for n, p in SHAPES.items()}
+
+
+derive_specs()
 
 
 # ---- shared checking and drawing (used by both solvers) ------------------
@@ -678,23 +708,14 @@ class Variant:
         return out
 
 
-def make_variants():
-    """The ten shapes as data.  The solver never looks at the names, so it
-    also accepts any other convex shapes put in this table."""
-    prims = {
-        "square 20x20": rect(20, 20), "square 25x25": rect(25, 25),
-        "rectangle 30x15": rect(30, 15), "rectangle 35x25": rect(35, 25),
-        "eq. triangle s=5": equilateral(5), "eq. triangle s=30": equilateral(30),
-        "eq. triangle s=40": equilateral(40),
-        "iso. triangle 20/25": isosceles(20, 25),
-        "iso. triangle 30/35": isosceles(30, 35),
-        "trapezium 20/30 h20": trapezium(20, 30, 20),
-    }
+def make_variants(shapes=None):
+    """Turn the shape table into placeable pieces.  The solver never looks at
+    the names - only at vertices - so any convex polygons work."""
     variants = {}
-    for name, poly in prims.items():
+    for name, poly in (shapes or SHAPES).items():
         single = Variant(name, [poly])
         pair = None
-        if len(poly) != 4 or name.startswith("trapezium"):
+        if not is_rectangle(poly):
             pair = Variant(name, pair_with_rotated_copy(poly))
         variants[name] = {"single": single, "pair": pair}
     return variants
@@ -854,8 +875,9 @@ def build_layout(variants, genome, orient_cap=6):
 def search_island(args):
     """One CPU core: try random genomes and mutations of the best so far
     until the deadline; return the densest layout as (name, poly) pairs."""
-    seed, deadline = args
-    variants = make_variants()
+    global CANVAS_W, CANVAS_H
+    seed, deadline, shapes, (CANVAS_W, CANVAS_H) = args   # fresh process: set sheet
+    variants = make_variants(shapes)
     rng = random.Random(seed)
     best = None
     while time.time() < deadline:
@@ -875,7 +897,8 @@ def run_generic(args):
     """Run one search island per CPU core and keep the best layout."""
     seed = 7 if args.seed is None else args.seed
     deadline = time.time() + args.budget
-    jobs = [(seed + 1000 * i, deadline) for i in range(args.workers)]
+    jobs = [(seed + 1000 * i, deadline, SHAPES, (CANVAS_W, CANVAS_H))
+            for i in range(args.workers)]
     print(f"searching on {args.workers} cores for {args.budget:.0f}s ...")
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         results = list(ex.map(search_island, jobs))
@@ -886,10 +909,33 @@ def run_generic(args):
 
 # ==========================================================================
 
+def load_shapes(path):
+    """Replace the sheet and shape table from a JSON file:
+    {"sheet": [W, H], "shapes": {"name": [[x, y], ...], ...}}"""
+    global CANVAS_W, CANVAS_H, SHAPES
+    import json
+    with open(path) as f:
+        data = json.load(f)
+    CANVAS_W, CANVAS_H = map(float, data["sheet"])
+    shapes = {}
+    for name, verts in data["shapes"].items():
+        poly = [tuple(map(float, v)) for v in verts]
+        if len(poly) < 3 or not is_convex(poly):
+            raise SystemExit(f"shape {name!r} is not a convex polygon")
+        if poly_area(poly) <= 0:
+            raise SystemExit(f"shape {name!r} has no area")
+        shapes[name] = poly
+    SHAPES = shapes
+    derive_specs()
+    print(f"loaded {len(SHAPES)} shapes on a {CANVAS_W:g} x {CANVAS_H:g} sheet from {path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="polynest - convex polygon nesting on a rectangular sheet.")
     ap.add_argument("--generic", "--advanced", dest="generic", action="store_true",
                     help="use the generic solver (works for any convex shapes)")
+    ap.add_argument("--shapes", default=None,
+                    help="JSON file with your own sheet and shapes (implies --generic)")
     ap.add_argument("--json", default=None,
                     help="also write the layout as JSON (name + vertices per piece)")
     ap.add_argument("--seed", type=int, default=None)
@@ -904,6 +950,13 @@ def main():
     ap.add_argument("--budget", type=float, default=520.0)
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
+
+    if args.shapes:
+        load_shapes(args.shapes)
+    if set(SHAPES) != BUNDLED and not args.generic:
+        print("custom shapes: the structured solver only knows the bundled "
+              "ten shapes, so the generic solver is used")
+        args.generic = True
 
     t0 = time.time()
     if args.generic:

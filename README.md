@@ -4,6 +4,7 @@
 
 **Packing convex polygons onto a sheet — 98.51% coverage, every piece proven overlap-free.**
 
+[![tests](https://github.com/danialza/polynest/actions/workflows/tests.yml/badge.svg)](https://github.com/danialza/polynest/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3d6fa8)](https://www.python.org/)
 [![Dependencies](https://img.shields.io/badge/solver-standard%20library%20only-2f8f83)](#)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7d8a9c)](LICENSE)
@@ -54,6 +55,10 @@ So the sheet splits into a rectangular region (tiled perfectly) and a triangular
 
 ## How the structured solver works
 
+<div align="center">
+<img src="docs/img/build.gif" alt="Animation: the record layout being built piece by piece, rectangles first, then the triangles" width="80%">
+</div>
+
 ```mermaid
 flowchart LR
   A["1 · Exact cover<br/>tile the rectangular<br/>zones, zero gaps"] --> B["2 · Trapezium pocket<br/>two trapezia interlock<br/>+ two corner triangles"]
@@ -102,6 +107,7 @@ pip install -r requirements.txt
 python polynest.py                                   # structured solver → result.png
 python polynest.py --generic --budget 60 --workers 8 # generic solver    → result_generic.png
 python polynest.py --json layout.json                # also export every piece's vertices
+python polynest.py --shapes examples/custom_shapes.json   # your own sheet and shapes
 ```
 
 The solver itself uses only the Python standard library; matplotlib draws the picture.
@@ -111,6 +117,7 @@ The solver itself uses only the Python standard library; matplotlib draws the pi
 | Flag | Solver | Default | Meaning |
 |---|---|---|---|
 | `--generic` | — | off | use the generic, any-convex-shape solver |
+| `--shapes` | generic | — | load your own sheet and shapes from JSON |
 | `--seed` | both | 1 / 7 | starting random seed |
 | `--out` | both | `result.png` | output image |
 | `--json` | both | — | write the layout as JSON |
@@ -120,32 +127,56 @@ The solver itself uses only the Python standard library; matplotlib draws the pi
 
 ## Bring your own shapes
 
-The generic solver packs whatever convex polygons you give it. Add a row in three places in `polynest.py`:
+The generic solver packs any convex polygons you give it — no code changes needed. Describe the sheet and the shapes in a JSON file:
 
-```python
-r3 = math.sqrt(3)
-
-# 1. the shape table, in make_variants()
-"hexagon 10": [(5, 0), (15, 0), (20, 5*r3), (15, 10*r3), (5, 10*r3), (0, 5*r3)],
-
-# 2. its area, in AREAS — used to score the layout
-"hexagon 10": 150 * r3,
-
-# 3. its side lengths, in SIDES — used by validate()
-"hexagon 10": [10] * 6,
+```json
+{
+  "sheet": [120, 80],
+  "shapes": {
+    "hexagon":        [[5, 0], [15, 0], [20, 8.660254], [15, 17.320508], [5, 17.320508], [0, 8.660254]],
+    "kite":           [[0, 0], [8, -6], [16, 0], [8, 14]],
+    "right triangle": [[0, 0], [24, 0], [0, 10]],
+    "trapezoid":      [[0, 0], [20, 0], [15, 8], [5, 8]],
+    "pentagon":       [[0, 0], [12, 0], [15.708, 11.413], [6, 18.466], [-3.708, 11.413]]
+  }
+}
 ```
 
-Then run `python polynest.py --generic` — the hexagons appear in the layout and in the legend. Keep coordinates exact (`math.sqrt(3)`, not `8.66`): `validate()` checks every side to 10⁻⁶ and will reject rounded values. Vertices go counter-clockwise; the helpers `rect()`, `equilateral()`, `isosceles()` and `trapezium()` build the common cases.
+```bash
+python polynest.py --shapes examples/custom_shapes.json --budget 60
+```
 
-The structured solver is purpose-built for the original ten shapes on a 200 × 100 sheet; for new shapes or a different sheet (`CANVAS_W`, `CANVAS_H`), use `--generic`.
+<div align="center">
+<img src="docs/img/custom.png" alt="Hexagons, trapezoids, kites, right triangles and a pentagon packed onto a 120 by 80 sheet" width="72%">
+</div>
+
+Every shape is placed at least once and checked like the bundled ones: each placed piece must keep the exact side lengths and area of its definition. Shapes must be convex — a non-convex one is rejected with a clear message. Vertex order and position don't matter.
+
+Prefer code? The `SHAPES` table near the top of `polynest.py` is the only place shapes are defined; add a row there and areas, side lengths and validation follow automatically. The structured solver is purpose-built for the original ten shapes on a 200 × 100 sheet, so with any other shapes polynest switches to the generic solver on its own.
+
+## Tested
+
+```bash
+pip install pytest && pytest -q
+```
+
+Thirteen tests run on every push (Python 3.10–3.13). Among them:
+
+- **the record** — the structured solver must reproduce the 98.51% layout exactly, 79 pieces, all valid;
+- **the insight** — every lattice-aligned side-30 / side-40 triangle covers exactly 36 / 64 cells;
+- **the geometry** — SAT detects overlaps but lets pieces touch; a triangle and its 180° copy form a parallelogram;
+- **the safety net** — `validate()` must reject overlapping pieces and a missing shape kind;
+- **the command line** — a custom shapes file runs end to end, and a non-convex shape is refused.
 
 ## Project layout
 
 ```
-polynest.py            both solvers, validation, plotting — one file
-docs/make_figures.py   renders every image in this README from the layouts
-docs/layouts/          the two layouts shown above, as JSON
-docs/img/              README figures
+polynest.py                 both solvers, validation, plotting, CLI — one file
+examples/custom_shapes.json a ready-made custom instance
+tests/                      pytest suite
+docs/make_figures.py        renders every image and the animation in this README
+docs/layouts/               the layouts shown above, as JSON
+docs/img/                   README figures
 ```
 
 Every figure is reproducible: export the layouts with `--json`, then run `python docs/make_figures.py`.

@@ -13,6 +13,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Polygon, FancyArrowPatch
 
 HERE = Path(__file__).parent
@@ -28,6 +29,19 @@ PALETTE = {                      # shape families share a hue
     "iso. triangle 20/25": "#c25b7a", "iso. triangle 30/35": "#8e4f8f",
     "trapezium 20/30 h20": "#7d8a9c",
 }
+EXTRA = ["#3d6fa8", "#ec9a45", "#2f8f83", "#c25b7a", "#8e4f8f", "#f2c75c",
+         "#7d8a9c", "#79c2b2", "#d4632a", "#7aa5d6"]
+
+
+def colour(name, order=[]):
+    """Fixed colour for the bundled shapes, a stable palette for any others."""
+    if name in PALETTE:
+        return PALETTE[name]
+    if name not in order:
+        order.append(name)
+    return EXTRA[order.index(name) % len(EXTRA)]
+
+
 plt.rcParams.update({"font.family": "DejaVu Sans", "text.color": INK,
                      "axes.edgecolor": LINE})
 
@@ -42,7 +56,7 @@ def draw_layout(ax, sheet, pieces, edge=0.45):
     ax.add_patch(Polygon([(0, 0), (w, 0), (w, h), (0, h)], closed=True,
                          facecolor="#f3f5f8", edgecolor=INK, linewidth=1.6, zorder=0))
     for name, verts in pieces:
-        ax.add_patch(Polygon(verts, closed=True, facecolor=PALETTE.get(name, "#999"),
+        ax.add_patch(Polygon(verts, closed=True, facecolor=colour(name),
                              edgecolor="white", linewidth=edge, zorder=2))
     ax.set_xlim(-2, w + 2)
     ax.set_ylim(-2, h + 2)
@@ -54,8 +68,9 @@ def legend(fig, pieces, y):
     counts = {}
     for n, _ in pieces:
         counts[n] = counts.get(n, 0) + 1
-    handles = [plt.Rectangle((0, 0), 1, 1, fc=PALETTE[n]) for n in PALETTE if n in counts]
-    labels = [f"{n}  ×{counts[n]}" for n in PALETTE if n in counts]
+    names = [n for n in PALETTE if n in counts] + [n for n in counts if n not in PALETTE]
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=colour(n)) for n in names]
+    labels = [f"{n}  ×{counts[n]}" for n in names]
     fig.legend(handles, labels, loc="lower center", ncol=5, frameon=False,
                fontsize=9, bbox_to_anchor=(0.5, y), handlelength=1.1,
                columnspacing=1.4, labelcolor=SOFT)
@@ -156,6 +171,68 @@ ax.set_ylim(-2.3, 6.5)
 ax.set_aspect("equal")
 ax.axis("off")
 fig.savefig(OUT / "sat.png", dpi=170, facecolor=PAPER, bbox_inches="tight")
+plt.close(fig)
+
+# ---- 5. your own shapes: the generic solver on a custom file -------------
+sheet, covered, pieces = load("custom")
+area = sheet[0] * sheet[1]
+fig = plt.figure(figsize=(8.6, 6.4), facecolor=PAPER)
+ax = fig.add_axes([0.04, 0.16, 0.92, 0.72])
+draw_layout(ax, sheet, pieces, edge=0.6)
+fig.text(0.04, 0.935, "examples/custom_shapes.json", fontsize=14, fontweight="bold",
+         family="DejaVu Sans Mono")
+fig.text(0.04, 0.895, f"{sheet[0]:g} × {sheet[1]:g} sheet · {len(pieces)} pieces · "
+         f"{100 * covered / area:.1f}% covered · generic solver", fontsize=10.5, color=SOFT)
+legend(fig, pieces, 0.02)
+fig.savefig(OUT / "custom.png", dpi=150, facecolor=PAPER)
+plt.close(fig)
+
+# ---- 6. animation: the record layout, built stage by stage ---------------
+sheet, covered, pieces = load("structured")
+area = sheet[0] * sheet[1]
+frames, small = [], []
+for i, (name, _) in enumerate(pieces):        # one frame per piece, small
+    if name == "eq. triangle s=5":            # triangles a few at a time
+        small.append(i)
+        if len(small) == 5:
+            frames.append(small)
+            small = []
+    else:
+        if small:
+            frames.append(small)
+            small = []
+        frames.append([i])
+if small:
+    frames.append(small)
+hold = 18
+fig = plt.figure(figsize=(8, 4.75), facecolor=PAPER)
+ax = fig.add_axes([0.02, 0.02, 0.96, 0.84])
+draw_layout(ax, sheet, [])
+patches = []
+for name, verts in pieces:
+    patch = Polygon(verts, closed=True, facecolor=colour(name), edgecolor="white",
+                    linewidth=0.45, zorder=2, visible=False)
+    ax.add_patch(patch)
+    patches.append(patch)
+label = fig.text(0.03, 0.91, "", fontsize=15, fontweight="bold")
+sub = fig.text(0.97, 0.915, "", fontsize=10.5, color=SOFT, ha="right")
+done = [0.0, 0]
+
+
+def step(k):
+    if k < len(frames):
+        for i in frames[k]:
+            patches[i].set_visible(True)
+            done[0] += abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in
+                               zip(pieces[i][1], pieces[i][1][1:] + pieces[i][1][:1]))) / 2
+            done[1] += 1
+    label.set_text(f"{100 * done[0] / area:5.2f}% covered")
+    sub.set_text(f"{done[1]} / {len(pieces)} pieces")
+    return patches + [label, sub]
+
+
+anim = FuncAnimation(fig, step, frames=len(frames) + hold, blit=False)
+anim.save(OUT / "build.gif", writer=PillowWriter(fps=8), dpi=80)
 plt.close(fig)
 
 print("figures written to", OUT)
